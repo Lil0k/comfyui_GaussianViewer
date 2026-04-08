@@ -249,23 +249,8 @@
                 camera.data.fx = fx;
                 camera.data.fy = fy;
 
-                // Calculate scale compensation
-                const containerWidth = canvas.clientWidth || 512;
-                let gaussianScaleCompensation = computeScaleCompensation(imageWidth, containerWidth);
-                
-                console.log('[RenderGaussian] Scale compensation:', gaussianScaleCompensation);
-
-                // Apply to splat if loaded
-                if (currentSplat && currentSplat.data && currentSplat.data.scales && originalScales) {
-                    const scales = currentSplat.data.scales;
-                    for (let i = 0; i < scales.length; i++) {
-                        const base = baseScales ? baseScales[i] : originalScales[i];
-                        originalScales[i] = base * gaussianScaleCompensation;
-                        scales[i] = originalScales[i];
-                    }
-                    currentSplat.data.changed = true;
-                    console.log('[RenderGaussian] Applied scale compensation to', scales.length, 'points');
-                }
+                // No scale compensation for render capture - splats stay at true size
+                console.log('[RenderGaussian] Render capture: skipping scale compensation');
             } else {
                 // No intrinsics, use reasonable defaults
                 const defaultSize = renderer.canvas.clientWidth || 512;
@@ -485,8 +470,8 @@
                     controls.update();
                     renderer.render(scene, camera);
                 }
-                await warmupRender(4);
-                await waitForRenderReady(3000);
+                await warmupRender(8);
+                await waitForRenderReady(5000);
 
                 // Determine output dimensions
                 const canvas = renderer.canvas;
@@ -681,21 +666,13 @@
                     console.log('[RenderGaussian] Setting camera parameters...');
                     if (camera_state) {
                         console.log('[RenderGaussian] Using camera_state');
-                        let compensation = camera_state.scale_compensation;
-                        if (!compensation) {
-                            const imageWidth = camera_state.image_width;
-                            const containerWidth = canvas.clientWidth || 512;
-                            console.log(`[RenderGaussian] Computing scale compensation: imageWidth=${imageWidth}, containerWidth=${containerWidth}`);
-                            compensation = computeScaleCompensation(imageWidth, containerWidth);
-                            console.log(`[RenderGaussian] Computed scale compensation: ${compensation} (ratio=${(imageWidth / containerWidth).toFixed(2)})`);
-                        }
-                        if (compensation) {
-                            console.log(`[RenderGaussian] Applying scale compensation: ${compensation}`);
-                            applyScaleCompensation(compensation);
-                        }
+                        // For render capture: do NOT apply scale compensation.
+                        // Compensation is only for CSS-downscaled preview display.
+                        // We capture at native pixel resolution so splats must stay at true size.
+                        console.log('[RenderGaussian] Skipping scale compensation for capture');
                         console.log('[RenderGaussian] Setting camera from state...');
                         setCameraFromState(camera_state);
-                        console.log('[RenderGaussian] Applying scale from state...');
+                        console.log('[RenderGaussian] Applying user scale from state...');
                         applyScaleFromState(camera_state);
                     } else if (extrinsics || intrinsics) {
                         console.log('[RenderGaussian] Using extrinsics/intrinsics');

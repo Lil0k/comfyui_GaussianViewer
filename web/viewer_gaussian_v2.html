@@ -1050,24 +1050,49 @@
 
             try {
                 const canvas = renderer.canvas;
-                const width = canvas.width;
-                const height = canvas.height;
 
                 // Pause the animation loop to ensure we capture a stable frame
                 if (animationId) cancelAnimationFrame(animationId);
 
-                // Force a single synchronous render to ensure the buffer is populated exactly as expected
+                // Strip scale compensation for pixel-accurate capture
+                let savedScales = null;
+                const hasCompensation = gaussianScaleCompensation && gaussianScaleCompensation > 1.0;
+                if (hasCompensation && currentSplat?.data?.scales && originalScales) {
+                    const scales = currentSplat.data.scales;
+                    savedScales = new Float32Array(scales.length);
+                    for (let i = 0; i < scales.length; i++) {
+                        savedScales[i] = scales[i];
+                        scales[i] = (originalScales[i] / gaussianScaleCompensation) * (currentScale || 1.0);
+                    }
+                    currentSplat.data.changed = true;
+                }
+
+                // Render several frames for re-sort
                 if (scene && camera) {
+                    for (let f = 0; f < 4; f++) {
+                        controls.update();
+                        renderer.render(scene, camera);
+                        await new Promise(r => requestAnimationFrame(r));
+                    }
                     controls.update();
                     renderer.render(scene, camera);
                 }
 
+                const width = canvas.width;
+                const height = canvas.height;
                 console.log('[GaussianViewer] Capturing screenshot via toDataURL:', width, 'x', height);
 
-                // Composite with black background to ensure consistency with preview
-                // The preview looks black because of CSS background, but the canvas might be transparent
                 const finalCanvas = getCanvasWithBlackBackground(canvas);
                 const dataUrl = finalCanvas.toDataURL('image/png');
+
+                // Restore scales
+                if (savedScales && currentSplat?.data?.scales) {
+                    const scales = currentSplat.data.scales;
+                    for (let i = 0; i < scales.length; i++) {
+                        scales[i] = savedScales[i];
+                    }
+                    currentSplat.data.changed = true;
+                }
 
                 window.parent.postMessage({
                     type: 'SCREENSHOT_V2',
@@ -1126,16 +1151,50 @@
 
                 if (animationId) cancelAnimationFrame(animationId);
 
+                // --- HIGH-QUALITY CAPTURE: strip scale compensation ---
+                // The preview inflates splat scales by gaussianScaleCompensation so they
+                // look solid when CSS-downscaled.  For pixel-accurate capture we must
+                // undo that inflation, keeping only the user's Scale slider value.
+                let savedScales = null;
+                const hasCompensation = gaussianScaleCompensation && gaussianScaleCompensation > 1.0;
+                if (hasCompensation && currentSplat?.data?.scales && originalScales) {
+                    const scales = currentSplat.data.scales;
+                    savedScales = new Float32Array(scales.length);
+                    for (let i = 0; i < scales.length; i++) {
+                        savedScales[i] = scales[i];
+                        // originalScales[i] = rawPlyScale * compensation
+                        // We want: rawPlyScale * userScale = (originalScales[i] / compensation) * currentScale
+                        scales[i] = (originalScales[i] / gaussianScaleCompensation) * (currentScale || 1.0);
+                    }
+                    currentSplat.data.changed = true;
+                    console.log('[GaussianViewer] Capture: stripped scale compensation',
+                        gaussianScaleCompensation.toFixed(2) + 'x, userScale=' + (currentScale || 1.0));
+                }
+
+                // Render several warmup frames so gsplat.js re-sorts with new scales
                 if (scene && camera) {
+                    for (let i = 0; i < 6; i++) {
+                        controls.update();
+                        renderer.render(scene, camera);
+                        await new Promise(r => requestAnimationFrame(r));
+                    }
+                    // Final render
                     controls.update();
-                    renderer.render(scene, camera);
-                    // Allow an extra frame for the render to complete
-                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     renderer.render(scene, camera);
                 }
 
                 const outputCanvas = createOutputCanvas() || getCanvasWithBlackBackground(renderer.canvas);
                 const dataUrl = outputCanvas.toDataURL('image/png');
+
+                // --- Restore compensated scales for preview ---
+                if (savedScales && currentSplat?.data?.scales) {
+                    const scales = currentSplat.data.scales;
+                    for (let i = 0; i < scales.length; i++) {
+                        scales[i] = savedScales[i];
+                    }
+                    currentSplat.data.changed = true;
+                    console.log('[GaussianViewer] Capture: restored preview scales');
+                }
 
                 window.parent.postMessage({
                     type: 'RENDER_RESULT',
@@ -1147,6 +1206,14 @@
 
                 resumeAnimationLoop();
             } catch (err) {
+                // Restore scales even on error
+                if (savedScales && currentSplat?.data?.scales) {
+                    const scales = currentSplat.data.scales;
+                    for (let i = 0; i < scales.length; i++) {
+                        scales[i] = savedScales[i];
+                    }
+                    currentSplat.data.changed = true;
+                }
                 window.parent.postMessage({
                     type: 'RENDER_ERROR',
                     request_id: requestId,
